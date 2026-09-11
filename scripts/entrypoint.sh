@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+die() { echo "FALHA: $*" >&2; exit 1; }
+read_password() {
+  if [[ -n "${FTP_PASSWORD_FILE:-}" ]]; then
+    [[ -r "$FTP_PASSWORD_FILE" ]] || die "FTP_PASSWORD_FILE nao pode ser lido"
+    tr -d '\r\n' < "$FTP_PASSWORD_FILE"
+  else
+    printf '%s' "${FTP_PASSWORD:-}"
+  fi
+}
+
+FTP_USER="${FTP_USER:-transfer}"
+FTP_PUBLIC_IP="${FTP_PUBLIC_IP:-127.0.0.1}"
+FTP_PASSIVE_PORT_START="${FTP_PASSIVE_PORT_START:-30000}"
+FTP_PASSIVE_PORT_END="${FTP_PASSIVE_PORT_END:-30049}"
+FTP_TLS_MODE="${FTP_TLS_MODE:-2}"
+FTP_MAX_CLIENTS="${FTP_MAX_CLIENTS:-50}"
+FTP_MAX_CLIENTS_PER_IP="${FTP_MAX_CLIENTS_PER_IP:-8}"
+password="$(read_password)"
+
+[[ "$FTP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "FTP_USER invalido"
+[[ ${#password} -ge 12 ]] || die "a senha FTP deve ter pelo menos 12 caracteres"
+[[ "$FTP_PASSIVE_PORT_START" =~ ^[0-9]+$ && "$FTP_PASSIVE_PORT_END" =~ ^[0-9]+$ ]] || die "faixa passiva invalida"
+(( FTP_PASSIVE_PORT_START >= 1024 && FTP_PASSIVE_PORT_END <= 65535 && FTP_PASSIVE_PORT_START <= FTP_PASSIVE_PORT_END )) || die "faixa passiva fora dos limites"
+[[ "$FTP_TLS_MODE" =~ ^[123]$ ]] || die "FTP_TLS_MODE deve ser 1, 2 ou 3"
+
+install -d -o root -g root -m 0750 /auth
+install -d -o ftpdata -g ftpdata -m 0750 "/data/$FTP_USER"
+touch /auth/pureftpd.passwd
+chmod 0600 /auth/pureftpd.passwd
+
+if grep -Fq "${FTP_USER}:" /auth/pureftpd.passwd; then
+  printf '%s\n%s\n' "$password" "$password" | pure-pw usermod "$FTP_USER" -f /auth/pureftpd.passwd
+else
+  printf '%s\n%s\n' "$password" "$password" | pure-pw useradd "$FTP_USER" \
+    -f /auth/pureftpd.passwd -u ftpdata -g ftpdata -d "/data/$FTP_USER"
+fi
+pure-pw mkdb /auth/pureftpd.pdb -f /auth/pureftpd.passwd
+chmod 0600 /auth/pureftpd.passwd /auth/pureftpd.pdb
+
+certificate=/etc/ssl/private/pure-ftpd.pem
+if [[ ! -s "$certificate" ]]; then
+  umask 077
+  if [[ "${FTP_CERT_CN:-localhost}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    certificate_san="IP:${FTP_CERT_CN:-127.0.0.1}"
+  else
+    certificate_san="DNS:${FTP_CERT_CN:-localhost}"
+  fi
+  openssl req -x509 -nodes -newkey rsa:3072 -sha256 -days 825 \
+    -keyout "$certificate" -out "$certificate" \
+    -subj "/C=BR/O=AllSafe/CN=${FTP_CERT_CN:-localhost}" \
+    -addext "subjectAltName=${certificate_san}" >/dev/null 2>&1
+fi
+chmod 0600 "$certificate"
+
+unset FTP_PASSWORD password
+echo "FTP pronto em 2121/tcp; TLS=${FTP_TLS_MODE}; passivo=${FTP_PASSIVE_PORT_START}-${FTP_PASSIVE_PORT_END}"
+exec /usr/sbin/pure-ftpd \
+  -A -E -H -j -R \
+  -c "$FTP_MAX_CLIENTS" -C "$FTP_MAX_CLIENTS_PER_IP" \
+  -I 15 -L 10000:8 -u 10000 -U 133:022 \
+  -l "puredb:/auth/pureftpd.pdb" \
+  -p "${FTP_PASSIVE_PORT_START}:${FTP_PASSIVE_PORT_END}" \
+  -P "$FTP_PUBLIC_IP" -S "0.0.0.0,2121" -Y "$FTP_TLS_MODE" \
+  -O clf:/dev/stdout

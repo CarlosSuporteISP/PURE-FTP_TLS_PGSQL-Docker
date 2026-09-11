@@ -1,0 +1,88 @@
+name: allsafe-ftp-stack
+
+services:
+  ftp:
+    image: ${FTP_IMAGE:-allsafe-ftp:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: allsafe-ftp
+    hostname: allsafe-ftp
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      FTP_USER: ${FTP_USER:-transfer}
+      FTP_PASSWORD: ${FTP_PASSWORD:-}
+      FTP_PASSWORD_FILE: ${FTP_PASSWORD_FILE:-}
+      FTP_PUBLIC_IP: ${FTP_PUBLIC_IP:-127.0.0.1}
+      FTP_PASSIVE_PORT_START: ${FTP_PASSIVE_PORT_START:-30000}
+      FTP_PASSIVE_PORT_END: ${FTP_PASSIVE_PORT_END:-30049}
+      FTP_MAX_CLIENTS: ${FTP_MAX_CLIENTS:-50}
+      FTP_MAX_CLIENTS_PER_IP: ${FTP_MAX_CLIENTS_PER_IP:-8}
+      FTP_TLS_MODE: ${FTP_TLS_MODE:-2}
+      FTP_CERT_CN: ${FTP_CERT_CN:-localhost}
+    ports:
+      - "${FTP_BIND_IP:-127.0.0.1}:${FTP_PORT:-21}:2121/tcp"
+      - "${FTP_BIND_IP:-127.0.0.1}:${FTP_PASSIVE_PORT_START:-30000}-${FTP_PASSIVE_PORT_END:-30049}:${FTP_PASSIVE_PORT_START:-30000}-${FTP_PASSIVE_PORT_END:-30049}/tcp"
+    volumes:
+      - ftp-data:/data
+      - ftp-auth:/auth
+      - ftp-certs:/etc/ssl/private
+      - ./.secrets:/run/.secrets:ro
+    read_only: true
+    tmpfs:
+      - /run:rw,noexec,nosuid,nodev,size=8m,mode=0755
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - AUDIT_WRITE
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+      - FOWNER
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+      - SYS_CHROOT
+      - SYS_NICE
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: ${FTP_PIDS_LIMIT:-128}
+    mem_limit: ${FTP_MEMORY_LIMIT:-256M}
+    cpus: ${FTP_CPU_LIMIT:-1.0}
+    ulimits:
+      nofile:
+        soft: ${FTP_NOFILE:-16384}
+        hard: ${FTP_NOFILE:-16384}
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD-SHELL", "pidof pure-ftpd >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      com.allsafe.product: allsafe-ftp-stack
+      com.allsafe.service: ftp
+    networks:
+      - ftp
+
+volumes:
+  ftp-data:
+    name: allsafe-ftp-data
+  ftp-auth:
+    name: allsafe-ftp-auth
+  ftp-certs:
+    name: allsafe-ftp-certs
+
+networks:
+  ftp:
+    name: allsafe-ftp-network
+    driver: bridge

@@ -1,0 +1,10 @@
+.env
+.env.example
+.git
+.gitignore
+.secrets
+doc
+profiles
+README.md
+deploy.sh
+manage-user.sh
